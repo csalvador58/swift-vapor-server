@@ -4,18 +4,20 @@ import Foundation
 import JWT
 import Vapor
 
-struct AuthPayload: JWTPayload {
+struct AuthPayload: JWTPayload, Authenticatable {
     enum CodingKeys: String, CodingKey {
         case subject = "sub"
         case expiration = "exp"
-        case userId = "userId"
-        case username = "username"
+        case username = "user"
     }
     
     var subject: SubjectClaim
     var expiration: ExpirationClaim
-    var userId: UUID
     var username: String
+    
+    var userId: UUID {
+        UUID(uuidString: subject.value)!
+    }
     
     func verify(using algorithm: some JWTAlgorithm) async throws {
         try self.expiration.verifyNotExpired()
