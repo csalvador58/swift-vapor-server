@@ -26,4 +26,14 @@ public func configure(_ app: Application) async throws {
 
     // register routes
     try routes(app)
+    
+    // MARK: - DEBUG ONLY
+    let envMode = Environment.get("ENV_MODE") ?? "DEBUG"
+    if envMode == "DEBUG" {
+        let currentDirectory = FileManager.default.currentDirectoryPath
+        print("***DEBUG MODE***")
+        print("DB Path: \(currentDirectory)/\(databaseFile)")
+
+        try await app.autoMigrate()
+    }
 }

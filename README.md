@@ -1,27 +1,23 @@
 # SwiftVaporServer
 
-💧 A project built with the Vapor web framework.
-
 ## Getting Started
 
-To build the project using the Swift Package Manager, run the following command in the terminal from the root of the project:
+Setup local development env
 ```bash
-swift build
+cp env.example .env.development
 ```
 
-To run the project and start the server, use the following command:
+Run migrations (Only if ENV_MODE is not set to DEBUG)
 ```bash
-swift run
+swift run SwiftVaporServer migrate --yes
 ```
 
-To execute tests, use the following command:
+Start server
+```bash
+swift run SwiftVaporServer serve
+```
+
+Run tests
 ```bash
 swift test
 ```
-
-### See more
-
-- [Vapor Website](https://vapor.codes)
-- [Vapor Documentation](https://docs.vapor.codes)
-- [Vapor GitHub](https://github.com/vapor)
-- [Vapor Community](https://github.com/vapor-community)
