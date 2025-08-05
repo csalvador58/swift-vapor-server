@@ -39,6 +39,7 @@ final class User: Model, @unchecked Sendable {
             id: id,
             username: self.username,
             createdAt: self.createdAt,
-            updatedAt: self.updatedAt)
+            updatedAt: self.updatedAt
+        )
     }
 }
