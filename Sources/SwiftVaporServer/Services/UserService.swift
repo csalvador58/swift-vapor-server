@@ -81,19 +81,19 @@ struct UserService {
 
 // MARK: - Private helpers
 private extension UserService {
-    private func validateUsername(_ username: String) throws {
+    func validateUsername(_ username: String) throws {
         guard !username.isEmpty else {
             throw Abort(.badRequest, reason: "Username is required")
         }
     }
     
-    private func validatePassword(_ password: String) throws {
+    func validatePassword(_ password: String) throws {
         guard password.count >= 8 else {
             throw Abort(.badRequest, reason: "Password must be at least 8 characters long")
         }
     }
     
-    private func validateUsernameDoesNotExist(_ username: String, req: Request) async throws {
+    func validateUsernameDoesNotExist(_ username: String, req: Request) async throws {
         let existingUser = try await User.query(on: req.db)
             .filter(\.$username == username.lowercased())
             .first()
