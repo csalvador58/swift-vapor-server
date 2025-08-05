@@ -20,3 +20,7 @@ struct CreateMessageDTO: Content {
     let recipientIDs: [UUID]
     let textContent: String?
 }
+
+struct DeleteMessagesDTO: Content {
+    let messageIDs: [UUID]
+}

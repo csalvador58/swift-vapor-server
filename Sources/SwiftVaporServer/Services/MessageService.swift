@@ -48,6 +48,45 @@ struct MessageService {
         }
         
     }
+    
+    func deleteMessages(for userId: UUID, messageIDs: [UUID], req: Request) async throws {
+        guard !messageIDs.isEmpty else {
+            throw Abort(.badRequest, reason: "Message ID(s) required")
+        }
+        
+        return try await req.db.transaction { db in
+            // Find user's sent messages
+            let userSentMessages = try await Message.query(on: db)
+                .filter(\.$sender.$id == userId)
+                .filter(\.$id ~~ messageIDs)
+                .all()
+            
+            // Delete messages the user sent
+            let sentMessageIDs = userSentMessages.compactMap { $0.id }
+            
+            if !sentMessageIDs.isEmpty {
+                try await MessageRecipient.query(on: db)
+                    .filter(\.$message.$id ~~ sentMessageIDs)
+                    .delete()
+                
+                try await Message.query(on: db)
+                    .filter(\.$id ~~ sentMessageIDs)
+                    .delete()
+            }
+            
+            // Exclude from message only if user is recipient
+            let receivedMessageIDs = messageIDs.filter { !sentMessageIDs.contains($0) }
+            
+            if !receivedMessageIDs.isEmpty {
+                try await MessageRecipient.query(on: db)
+                    .filter(\.$message.$id ~~ receivedMessageIDs)
+                    .filter(\.$user.$id == userId)
+                    .filter(\.$deletedAt == nil)
+                    .set(\.$deletedAt, to: Date())
+                    .update()
+            }
+        }
+    }
 }
 
 // MARK: - Private helpers
@@ -69,6 +108,7 @@ private extension MessageService {
             .with(\.$recipients)
             .join(MessageRecipient.self, on: \Message.$id == \MessageRecipient.$message.$id)
             .filter(MessageRecipient.self, \.$user.$id == userId)
+            .filter(MessageRecipient.self, \.$deletedAt == nil)
             .sort(\.$sentAt, .descending)
             .all()
         

@@ -18,6 +18,10 @@ final class MessageRecipient: Model, @unchecked Sendable {
     @Timestamp(key: "received_at", on: .none)
     var receivedAt: Date?
     
+    // Optional field to allow a user to exclude message from view when a recipient
+    @OptionalField(key: "deleted_at")
+    var deletedAt: Date?
+    
     init() { }
     
     init(id: UUID? = nil, messageID: UUID, userID: UUID) {

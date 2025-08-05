@@ -10,6 +10,7 @@ struct MessageController: RouteCollection {
         let protected = messages.grouped(UserAuthenticator())
         protected.get(use: self.getMessages)
         protected.post("new", use: self.sendMessage)
+        protected.delete(use: self.deleteMessages)
     }
     
     @Sendable
@@ -32,5 +33,20 @@ struct MessageController: RouteCollection {
         )
         
         return messageId.uuidString
+    }
+    
+    @Sendable
+    func deleteMessages(req: Request) async throws -> HTTPStatus {
+        let deleteMessagesDTO = try req.content.decode(DeleteMessagesDTO.self)
+        
+        let payload = try req.auth.require(AuthPayload.self)
+        
+        try await req.messageService.deleteMessages(
+            for: payload.userId,
+            messageIDs: deleteMessagesDTO.messageIDs,
+            req: req
+        )
+        
+        return .noContent
     }
 }
