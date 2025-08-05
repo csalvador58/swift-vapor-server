@@ -23,6 +23,8 @@ public func configure(_ app: Application) async throws {
     app.databases.use(DatabaseConfigurationFactory.sqlite(.file(databaseFile)), as: .sqlite)
 
     app.migrations.add(CreateUser())
+    app.migrations.add(CreateMessage())
+    app.migrations.add(CreateMessageRecipient())
 
     // register routes
     try routes(app)
