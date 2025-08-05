@@ -15,8 +15,8 @@ final class MessageRecipient: Model, @unchecked Sendable {
     @Parent(key: "user_id")
     var user: User
     
-    @Timestamp(key: "read_at", on: .none)
-    var readAt: Date?
+    @Timestamp(key: "received_at", on: .none)
+    var receivedAt: Date?
     
     init() { }
     
