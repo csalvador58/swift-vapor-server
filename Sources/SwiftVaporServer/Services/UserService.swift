@@ -24,7 +24,7 @@ struct UserService {
     
     func authenticateUser(dto: LoginUserDTO, req: Request) async throws -> User {
         guard let user = try await User.query(on: req.db)
-            .filter(\.$username == dto.username.lowercased())
+            .filter(\.$username == dto.username)
             .first()
         else {
             throw Abort(.unauthorized, reason: "Invalid credentials")
