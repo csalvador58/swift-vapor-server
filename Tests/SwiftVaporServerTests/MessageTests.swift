@@ -135,4 +135,329 @@ struct MessagesTest {
                 })
         }
     }
+    
+    @Test("Get all messages for a user - Sent and Received")
+    func getAllMessages() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let user1 = testUsers[0]
+            let user2 = testUsers[1]
+            let user3 = testUsers[2]
+            
+            guard let user1Token = user1.token,
+                  let user2Token = user2.token,
+                  let user1Id = user1.user.id,
+                  let user2Id = user2.user.id,
+                  let user3Id = user3.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            let messageFromUser1ToUser2And3DTO = CreateMessageDTO(
+                recipientIDs: [user2Id, user3Id],
+                textContent: "Test message from user1 to user2 and user3"
+            )
+            
+            var messageFromUser1ToUser2AndUser3Id: UUID?
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                    try req.content.encode(messageFromUser1ToUser2And3DTO)
+                },
+                afterResponse: { res in
+                    let messageId = try res.content.decode(String.self)
+                    messageFromUser1ToUser2AndUser3Id = UUID(uuidString: messageId)
+                })
+            
+            let messageFromUser2ToUser1DTO = CreateMessageDTO(
+                recipientIDs: [user1Id],
+                textContent: "Test message from user2 to user1"
+            )
+            
+            var messageFromUser2ToUser1Id: UUID?
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user2Token)
+                    try req.content.encode(messageFromUser2ToUser1DTO)
+                },
+                afterResponse: { res in
+                    let messageId = try res.content.decode(String.self)
+                    messageFromUser2ToUser1Id = UUID(uuidString: messageId)
+                })
+            
+            // Get all messages for user1
+            try await app.testing().test(
+                .GET, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                },
+                afterResponse: { res in
+                    #expect(res.status == .ok)
+                    
+                    let messages = try res.content.decode([MessageDTO].self)
+                    #expect(messages.count == 2)
+                    
+                    let messageIds = messages.map { $0.id }
+                    #expect(messageIds.contains(messageFromUser1ToUser2AndUser3Id!))
+                    #expect(messageIds.contains(messageFromUser2ToUser1Id!))
+                    
+                    // Check the sent message
+                    if let sentMessage = messages.first(where: { $0.id == messageFromUser1ToUser2AndUser3Id }) {
+                        #expect(sentMessage.sender.id == user1Id)
+                        #expect(sentMessage.textContent == "Test message from user1 to user2 and user3")
+                        #expect(sentMessage.recipients.contains("testUser2"))
+                        #expect(sentMessage.recipients.contains("testUser3"))
+                    }
+                    
+                    // Check the received message
+                    if let receivedMessage = messages.first(where: { $0.id == messageFromUser2ToUser1Id }) {
+                        #expect(receivedMessage.sender.id == user2Id)
+                        #expect(receivedMessage.textContent == "Test message from user2 to user1")
+                        #expect(receivedMessage.recipients.contains("testUser1"))
+                    }
+                })
+            
+            // Get all messages for user2
+            try await app.testing().test(
+                .GET, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user2Token)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    
+                    let messages = try res.content.decode([MessageDTO].self)
+                    #expect(messages.count == 2)
+                    
+                    let messageIds = messages.map { $0.id }
+                    #expect(messageIds.contains(messageFromUser1ToUser2AndUser3Id!))
+                    #expect(messageIds.contains(messageFromUser2ToUser1Id!))
+                })
+            
+        }
+    }
+    
+    @Test("Delete message as sender")
+    func deleteMessageAsSender() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let sender = testUsers[0]
+            let recipient = testUsers[1]
+            
+            guard let senderToken = sender.token,
+                  let recipientToken = recipient.token,
+                  let recipientId = recipient.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            // Send a message
+            let messageFromSenderToRecipientDTO = CreateMessageDTO(
+                recipientIDs: [recipientId],
+                textContent: "Test message from sender to recipient - to be deleted by sender"
+            )
+            
+            var messageFromSenderToRecipientId: UUID?
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                    try req.content.encode(messageFromSenderToRecipientDTO)
+                },
+                afterResponse: { res in
+                    let messageIdString = try res.content.decode(String.self)
+                    messageFromSenderToRecipientId = UUID(uuidString: messageIdString)
+                })
+            
+            guard let messageFromSenderToRecipientId = messageFromSenderToRecipientId else {
+                Issue.record("Message ID is missing")
+                return
+            }
+            
+            // Delete message as sender
+            let deleteMessagesDTO = DeleteMessagesDTO(messageIDs: [messageFromSenderToRecipientId])
+            
+            try await app.testing().test(
+                .DELETE, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                    try req.content.encode(deleteMessagesDTO)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .noContent)
+                    
+                    // Verify message is completely deleted from database
+                    let message = try await Message.find(messageFromSenderToRecipientId, on: app.db)
+                    #expect(message == nil)
+                    
+                    // Verify message recipients are also deleted
+                    let recipients = try await MessageRecipient.query(on: app.db)
+                        .filter(\.$message.$id == messageFromSenderToRecipientId)
+                        .all()
+                    #expect(recipients.isEmpty)
+                })
+            
+            // Verify recipient no longer sees the message
+            try await app.testing().test(
+                .GET, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: recipientToken)
+                },
+                afterResponse: { res async throws in
+                    let messages = try res.content.decode([MessageDTO].self)
+                    let messageIds = messages.map { $0.id }
+                    #expect(!messageIds.contains(messageFromSenderToRecipientId))
+                })
+        }
+    }
+    
+    @Test("Delete message as recipient")
+    func deleteMessageAsRecipient() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let sender = testUsers[0]
+            let recipient = testUsers[1]
+            
+            guard let senderToken = sender.token,
+                  let recipientToken = recipient.token,
+                  let recipientId = recipient.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            // Send a message
+            let messageFromSenderToRecipientDTO = CreateMessageDTO(
+                recipientIDs: [recipientId],
+                textContent: "Test message from sender to recipient - to be deleted by recipient"
+            )
+            
+            var messageFromSenderToRecipientId: UUID?
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                    try req.content.encode(messageFromSenderToRecipientDTO)
+                },
+                afterResponse: { res in
+                    let messageIdString = try res.content.decode(String.self)
+                    messageFromSenderToRecipientId = UUID(uuidString: messageIdString)
+                })
+            
+            guard let messageFromSenderToRecipientId = messageFromSenderToRecipientId else {
+                Issue.record("Message ID is missing")
+                return
+            }
+            
+            // Delete message as recipient
+            let deleteMessagesDTO = DeleteMessagesDTO(messageIDs: [messageFromSenderToRecipientId])
+            
+            try await app.testing().test(
+                .DELETE, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: recipientToken)
+                    try req.content.encode(deleteMessagesDTO)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .noContent)
+                    
+                    // Verify message still exists in database
+                    let message = try await Message.find(messageFromSenderToRecipientId, on: app.db)
+                    #expect(message != nil)
+                    
+                    // Verify recipient entry is soft deleted
+                    let recipientEntry = try await MessageRecipient.query(on: app.db)
+                        .filter(\.$message.$id == messageFromSenderToRecipientId)
+                        .filter(\.$user.$id == recipientId)
+                        .first()
+                    #expect(recipientEntry?.deletedAt != nil)
+                })
+            
+            // Verify recipient no longer sees the message
+            try await app.testing().test(
+                .GET, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: recipientToken)
+                },
+                afterResponse: { res async throws in
+                    let messages = try res.content.decode([MessageDTO].self)
+                    let messageIds = messages.map { $0.id }
+                    #expect(!messageIds.contains(messageFromSenderToRecipientId))
+                })
+            
+            // Verify sender still sees the message
+            try await app.testing().test(
+                .GET, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                },
+                afterResponse: { res async throws in
+                    let messages = try res.content.decode([MessageDTO].self)
+                    let messageIds = messages.map { $0.id }
+                    #expect(messageIds.contains(messageFromSenderToRecipientId))
+                })
+        }
+    }
+    
+    @Test("Send message with invalid recipient IDs")
+    func sendMessageWithInvalidRecipients() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let sender = testUsers[0]
+            
+            guard let senderToken = sender.token else {
+                Issue.record("Sender token is missing")
+                return
+            }
+            
+            // Create message with non-existent recipient IDs
+            let nonExistentRecipientId = UUID()
+            let messageWithInvalidRecipientDTO = CreateMessageDTO(
+                recipientIDs: [nonExistentRecipientId],
+                textContent: "Test message with invalid recipient"
+            )
+            
+            // Attempt to send message
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                    try req.content.encode(messageWithInvalidRecipientDTO)
+                },
+                afterResponse: { res async in
+                    #expect(res.status == .badRequest)
+                })
+        }
+    }
+    
+    @Test("Send message with empty recipient list")
+    func sendMessageWithEmptyRecipients() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let sender = testUsers[0]
+            
+            guard let senderToken = sender.token else {
+                Issue.record("Sender token is missing")
+                return
+            }
+            
+            // Create message with empty recipient list
+            let messageWithNoRecipientsDTO = CreateMessageDTO(
+                recipientIDs: [],
+                textContent: "Test message with no recipients"
+            )
+            
+            // Attempt to send message
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                    try req.content.encode(messageWithNoRecipientsDTO)
+                },
+                afterResponse: { res async in
+                    #expect(res.status == .badRequest)
+                })
+        }
+    }
 }
