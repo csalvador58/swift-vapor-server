@@ -333,7 +333,7 @@ struct MessagesTest {
                 textContent: "Test message from sender to recipient - to be deleted by recipient"
             )
             
-            var messageFromSenderToRecipientId: UUID?
+            var messageIdString: UUID?
             try await app.testing().test(
                 .POST, "messages/new",
                 beforeRequest: { req in
@@ -341,11 +341,11 @@ struct MessagesTest {
                     try req.content.encode(messageFromSenderToRecipientDTO)
                 },
                 afterResponse: { res in
-                    let messageIdString = try res.content.decode(String.self)
-                    messageFromSenderToRecipientId = UUID(uuidString: messageIdString)
+                    let messageId = try res.content.decode(String.self)
+                    messageIdString = UUID(uuidString: messageId)
                 })
             
-            guard let messageFromSenderToRecipientId = messageFromSenderToRecipientId else {
+            guard let messageFromSenderToRecipientId = messageIdString else {
                 Issue.record("Message ID is missing")
                 return
             }
@@ -457,6 +457,213 @@ struct MessagesTest {
                 },
                 afterResponse: { res async in
                     #expect(res.status == .badRequest)
+                })
+        }
+    }
+    
+    @Test("Message recipient marking as received")
+    func messageRecipientMarkingAsReceived() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let sender = testUsers[0]
+            let recipient = testUsers[1]
+            
+            guard let senderToken = sender.token,
+                  let recipientToken = recipient.token,
+                  let recipientId = recipient.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            // Send a message
+            let messageFromSenderToRecipientDTO = CreateMessageDTO(
+                recipientIDs: [recipientId],
+                textContent: "Test message from sender to recipient - to test received marking"
+            )
+            
+            var messageIdString: UUID?
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                    try req.content.encode(messageFromSenderToRecipientDTO)
+                },
+                afterResponse: { res in
+                    let messageId = try res.content.decode(String.self)
+                    messageIdString = UUID(uuidString: messageId)
+                })
+            
+            guard let messageFromSenderToRecipientId = messageIdString else {
+                Issue.record("Message ID is missing")
+                return
+            }
+            
+            // Check that receivedAt is initially nil
+            let initialRecipientEntry = try await MessageRecipient.query(on: app.db)
+                .filter(\.$message.$id == messageFromSenderToRecipientId)
+                .filter(\.$user.$id == recipientId)
+                .first()
+            #expect(initialRecipientEntry?.receivedAt == nil)
+            
+            // Recipient fetches messages
+            try await app.testing().test(
+                .GET, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: recipientToken)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    
+                    // Verify receivedAt is now set
+                    let updatedRecipientEntry = try await MessageRecipient.query(on: app.db)
+                        .filter(\.$message.$id == messageFromSenderToRecipientId)
+                        .filter(\.$user.$id == recipientId)
+                        .first()
+                    #expect(updatedRecipientEntry?.receivedAt != nil)
+                })
+        }
+    }
+    
+    @Test("Delete multiple messages at once")
+    func deleteMultipleMessages() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let sender = testUsers[0]
+            let recipient = testUsers[1]
+            
+            guard let senderToken = sender.token,
+                  let recipientId = recipient.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            var messageIdsFromSenderToRecipient: [UUID] = []
+            
+            // Send multiple messages
+            for i in 1...3 {
+                let messageFromSenderToRecipientDTO = CreateMessageDTO(
+                    recipientIDs: [recipientId],
+                    textContent: "Test message \(i) from sender to recipient - to be deleted"
+                )
+                
+                try await app.testing().test(
+                    .POST, "messages/new",
+                    beforeRequest: { req in
+                        req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                        try req.content.encode(messageFromSenderToRecipientDTO)
+                    },
+                    afterResponse: { res in
+                        let messageIdString = try res.content.decode(String.self)
+                        if let messageId = UUID(uuidString: messageIdString) {
+                            messageIdsFromSenderToRecipient.append(messageId)
+                        }
+                    })
+            }
+            
+            #expect(messageIdsFromSenderToRecipient.count == 3)
+            
+            // Delete all messages at once
+            let deleteMultipleMessagesDTO = DeleteMessagesDTO(messageIDs: messageIdsFromSenderToRecipient)
+            
+            try await app.testing().test(
+                .DELETE, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: senderToken)
+                    try req.content.encode(deleteMultipleMessagesDTO)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .noContent)
+                    
+                    // Verify all messages are deleted
+                    for messageId in messageIdsFromSenderToRecipient {
+                        let message = try await Message.find(messageId, on: app.db)
+                        #expect(message == nil)
+                    }
+                })
+        }
+    }
+    
+    @Test("Delete with empty message ID list")
+    func deleteWithEmptyMessageIds() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let user = testUsers[0]
+            
+            guard let userToken = user.token else {
+                Issue.record("User token is missing")
+                return
+            }
+            
+            // Attempt to delete with empty list
+            let deleteEmptyMessagesDTO = DeleteMessagesDTO(messageIDs: [])
+            
+            try await app.testing().test(
+                .DELETE, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: userToken)
+                    try req.content.encode(deleteEmptyMessagesDTO)
+                },
+                afterResponse: { res async in
+                    #expect(res.status == .badRequest)
+                })
+        }
+    }
+    
+    @Test("Messages are sorted by sentAt in descending order")
+    func messagesAreSortedBySentAt() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let user1 = testUsers[0]
+            let user2 = testUsers[1]
+            
+            guard let user1Token = user1.token,
+                  let user2Id = user2.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            var messagesToUser2: [String] = []
+            
+            // Send multiple messages
+            for i in 1...3 {
+                let messageText = "Test message \(i) from user1 to user2"
+                messagesToUser2.append(messageText)
+                
+                let messageFromUser1ToUser2DTO = CreateMessageDTO(
+                    recipientIDs: [user2Id],
+                    textContent: messageText
+                )
+                
+                try await app.testing().test(
+                    .POST, "messages/new",
+                    beforeRequest: { req in
+                        req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                        try req.content.encode(messageFromUser1ToUser2DTO)
+                    },
+                    afterResponse: { res in
+                        #expect(res.status == .ok)
+                    })
+                
+                // Small delay to ensure different timestamps
+                try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            }
+            
+            // Get messages and verify order
+            try await app.testing().test(
+                .GET, "messages",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                },
+                afterResponse: { res async throws in
+                    #expect(res.status == .ok)
+                    
+                    let messages = try res.content.decode([MessageDTO].self)
+                    #expect(messages.count == 3)
+                    
+                    // Messages should be in descending order (newest first)
+                    #expect(messages[0].textContent == "Test message 3 from user1 to user2")
+                    #expect(messages[1].textContent == "Test message 2 from user1 to user2")
+                    #expect(messages[2].textContent == "Test message 1 from user1 to user2")
                 })
         }
     }

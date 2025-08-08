@@ -34,7 +34,7 @@ struct UserService {
         guard passwordValidationResult else {
             throw Abort(.unauthorized, reason: "Invalid credentials")
         }
-        
+        req.logger.info("User logged in", metadata: ["username": .string(user.username)])
         return user
     }
     
