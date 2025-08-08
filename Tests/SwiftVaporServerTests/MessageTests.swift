@@ -667,4 +667,213 @@ struct MessagesTest {
                 })
         }
     }
+    
+    @Test("Messages between same participants have same hash")
+    func messagesBetweenSameParticipantsHaveSameHash() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let user1 = testUsers[0]
+            let user2 = testUsers[1]
+            let user3 = testUsers[2]
+            
+            guard let user1Token = user1.token,
+                  let user2Token = user2.token,
+                  let user1Id = user1.user.id,
+                  let user2Id = user2.user.id,
+                  let user3Id = user3.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            // User1 sends to User2 and User3
+            let message1DTO = CreateMessageDTO(
+                recipientIDs: [user2Id, user3Id],
+                textContent: "Message 1 from user1 to user2 and user3"
+            )
+            
+            var message1Id: UUID?
+            var message1Hash: String?
+            
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                    try req.content.encode(message1DTO)
+                },
+                afterResponse: { res async throws in
+                    let messageIdString = try res.content.decode(String.self)
+                    message1Id = UUID(uuidString: messageIdString)
+                    
+                    // Get the message to check its hash
+                    if let messageId = message1Id {
+                        let message = try await Message.find(messageId, on: app.db)
+                        message1Hash = message?.participantHash
+                    }
+                })
+            
+            // User2 sends to User1 and User3 (same participants, different sender)
+            let message2DTO = CreateMessageDTO(
+                recipientIDs: [user1Id, user3Id],
+                textContent: "Message 2 from user2 to user1 and user3"
+            )
+            
+            var message2Id: UUID?
+            var message2Hash: String?
+            
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user2Token)
+                    try req.content.encode(message2DTO)
+                },
+                afterResponse: { res async throws in
+                    let messageIdString = try res.content.decode(String.self)
+                    message2Id = UUID(uuidString: messageIdString)
+                    
+                    // Get the message to check its hash
+                    if let messageId = message2Id {
+                        let message = try await Message.find(messageId, on: app.db)
+                        message2Hash = message?.participantHash
+                    }
+                })
+            
+            // Both messages should have the same participant hash
+            #expect(message1Hash != nil)
+            #expect(message2Hash != nil)
+            #expect(message1Hash == message2Hash)
+        }
+    }
+    
+    @Test("Messages with different participants have different hashes")
+    func messagesWithDifferentParticipantsHaveDifferentHashes() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let user1 = testUsers[0]
+            let user2 = testUsers[1]
+            let user3 = testUsers[2]
+            
+            guard let user1Token = user1.token,
+                  let user1Id = user1.user.id,
+                  let user2Id = user2.user.id,
+                  let user3Id = user3.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            // User1 sends to User2 only
+            let message1DTO = CreateMessageDTO(
+                recipientIDs: [user2Id],
+                textContent: "Message from user1 to user2 only"
+            )
+            
+            var message1Hash: String?
+            
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                    try req.content.encode(message1DTO)
+                },
+                afterResponse: { res async throws in
+                    let messageIdString = try res.content.decode(String.self)
+                    if let messageId = UUID(uuidString: messageIdString) {
+                        let message = try await Message.find(messageId, on: app.db)
+                        message1Hash = message?.participantHash
+                    }
+                })
+            
+            // User1 sends to User2 and User3
+            let message2DTO = CreateMessageDTO(
+                recipientIDs: [user2Id, user3Id],
+                textContent: "Message from user1 to user2 and user3"
+            )
+            
+            var message2Hash: String?
+            
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                    try req.content.encode(message2DTO)
+                },
+                afterResponse: { res async throws in
+                    let messageIdString = try res.content.decode(String.self)
+                    if let messageId = UUID(uuidString: messageIdString) {
+                        let message = try await Message.find(messageId, on: app.db)
+                        message2Hash = message?.participantHash
+                    }
+                })
+            
+            // Different participant sets should have different hashes
+            #expect(message1Hash != nil)
+            #expect(message2Hash != nil)
+            #expect(message1Hash != message2Hash)
+        }
+    }
+    
+    @Test("Hash consistency regardless of recipient order")
+    func hashConsistencyRegardlessOfRecipientOrder() async throws {
+        try await withApp { app in
+            let testUsers = try await createTestUsersWithLoginTokens(on: app)
+            let user1 = testUsers[0]
+            let user2 = testUsers[1]
+            let user3 = testUsers[2]
+            
+            guard let user1Token = user1.token,
+                  let user2Id = user2.user.id,
+                  let user3Id = user3.user.id else {
+                Issue.record("Required test data is missing")
+                return
+            }
+            
+            // Send with recipients in order [user2, user3]
+            let message1DTO = CreateMessageDTO(
+                recipientIDs: [user2Id, user3Id],
+                textContent: "Message with recipients in order 2, 3"
+            )
+            
+            var message1Hash: String?
+            
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                    try req.content.encode(message1DTO)
+                },
+                afterResponse: { res async throws in
+                    let messageIdString = try res.content.decode(String.self)
+                    if let messageId = UUID(uuidString: messageIdString) {
+                        let message = try await Message.find(messageId, on: app.db)
+                        message1Hash = message?.participantHash
+                    }
+                })
+            
+            // Send with recipients in order [user3, user2] (reversed)
+            let message2DTO = CreateMessageDTO(
+                recipientIDs: [user3Id, user2Id],
+                textContent: "Message with recipients in order 3, 2"
+            )
+            
+            var message2Hash: String?
+            
+            try await app.testing().test(
+                .POST, "messages/new",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: user1Token)
+                    try req.content.encode(message2DTO)
+                },
+                afterResponse: { res async throws in
+                    let messageIdString = try res.content.decode(String.self)
+                    if let messageId = UUID(uuidString: messageIdString) {
+                        let message = try await Message.find(messageId, on: app.db)
+                        message2Hash = message?.participantHash
+                    }
+                })
+            
+            // Both messages should have the same hash despite different recipient order
+            #expect(message1Hash != nil)
+            #expect(message2Hash != nil)
+            #expect(message1Hash == message2Hash)
+        }
+    }
 }

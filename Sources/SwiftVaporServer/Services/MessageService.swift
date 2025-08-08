@@ -28,9 +28,16 @@ struct MessageService {
         // Validate recipients
         try await validateRecipients(dto.recipientIDs, req: req)
         
+        // Compute participant hash
+        let participantHash = computeParticipantHash(senderId: userId, recipientIds: dto.recipientIDs)
+        
         return try await req.db.transaction { db in
             // Create message
-            let message = Message(senderID: userId, textContent: dto.textContent)
+            let message = Message(
+                senderID: userId,
+                textContent: dto.textContent,
+                participantHash: participantHash
+            )
             try await message.save(on: db)
             
             guard let messageId = message.id else {
@@ -130,6 +137,24 @@ private extension MessageService {
         guard existingUsers == recipientIDs.count else {
             throw Abort(.badRequest, reason: "One or more recipient IDs are invalid")
         }
+    }
+    
+    func computeParticipantHash(senderId: UUID, recipientIds: [UUID]) -> String {
+        var allParticipants = recipientIds
+        allParticipants.append(senderId)
+        
+        // Remove duplicates and sort to ensure consistent hash
+        let uniqueSortedParticipants = Set(allParticipants)
+            .map { $0.uuidString.lowercased() }
+            .sorted()
+            .joined(separator: ",")
+        
+        // Compute hash
+        let inputData = Data(uniqueSortedParticipants.utf8)
+        let hashedData = SHA256.hash(data: inputData)
+        
+        // Convert to hex string
+        return hashedData.compactMap { String(format: "%02x", $0) }.joined()
     }
 }
 

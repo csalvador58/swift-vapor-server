@@ -8,6 +8,7 @@ struct CreateMessage: AsyncMigration {
             .id()
             .field("sender_id", .uuid, .required, .references("users", "id"))
             .field("text_content", .string)
+            .field("participant_hash", .string)
             .field("sent_at", .datetime)
             .create()
     }

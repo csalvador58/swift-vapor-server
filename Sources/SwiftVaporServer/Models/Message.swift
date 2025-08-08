@@ -19,15 +19,19 @@ final class Message: Model, @unchecked Sendable {
     @OptionalField(key: "text_content")
     var textContent: String?
     
+    @OptionalField(key: "participant_hash")
+    var participantHash: String?
+    
     @Timestamp(key: "sent_at", on: .create)
     var sentAt: Date?
     
     init() { }
     
-    init(id: UUID? = nil, senderID: UUID, textContent: String? = nil) {
+    init(id: UUID? = nil, senderID: UUID, textContent: String? = nil, participantHash: String? = nil) {
         self.id = id
         self.$sender.id = senderID
         self.textContent = textContent
+        self.participantHash = participantHash
     }
     
     func toMessageDTO() throws -> MessageDTO {
@@ -44,6 +48,7 @@ final class Message: Model, @unchecked Sendable {
             sender: senderDTO,
             recipients: recipientUsernames,
             textContent: self.textContent,
+            participantHash: self.participantHash,
             sentAt: self.sentAt
         )
     }
